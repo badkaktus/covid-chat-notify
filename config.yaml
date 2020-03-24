@@ -1,0 +1,18 @@
+locations:
+  # put countries/states what need to add to message
+  - Russia
+  - Maryland
+  - Diamond Princess
+  - Republic of the Congo
+rocketchat:
+  active: false
+  url: url # endpoint RocketChat https//yourdomain/api/v1/chat.postMessage
+  user-id:  
+  channel-name: test # write without hash symbol
+  token: 
+slack:
+  active: false
+  url: url # endpoint Slack https//yourdomain/api/chat.postMessage
+  user-id: 
+  channel-name: test # write without hash symbol
+  token: # xoxp-......

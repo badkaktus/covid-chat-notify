@@ -1,12 +1,51 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/go-github/github"
+	"gopkg.in/yaml.v3"
 )
 
-func readCSVFromUrl(url string) ([][]string, error) {
+// Row comment
+type Row struct {
+	province   string
+	country    string
+	confirmed  int
+	deaths     int
+	recovered  int
+	lastUpdate string
+}
+
+// Messenger comment
+type Messenger struct {
+	Active      bool
+	URL         string
+	UserID      string `yaml:"user-id"`
+	ChannelName string `yaml:"channel-name"`
+	Token       string
+}
+
+// Config comment
+type Config struct {
+	Locations  []string
+	Rocketchat Messenger
+	Slack      Messenger
+}
+
+var lastFileURL, lastFileName, key, findKey string
+
+func readCSVFromURL(url string) ([][]string, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -21,55 +60,168 @@ func readCSVFromUrl(url string) ([][]string, error) {
 	return data, nil
 }
 
+func addData() {
+
+}
+
 func main() {
 
-	// client := github.NewClient(nil)
+	t, err := ioutil.ReadFile("config.yaml")
+	if err != nil {
+		panic(err)
+	}
 
-	// _, directoryContent, _, err := client.Repositories.GetContents(context.Background(), "CSSEGISandData", "COVID-19", "csse_covid_19_data/csse_covid_19_daily_reports", nil)
+	config := Config{}
 
-	// if err != nil {
-	// 	panic(err)
-	// }
+	err = yaml.Unmarshal(t, &config)
 
-	// for _, v := range directoryContent {
-	// 	fmt.Println(v.GetType(), v.GetName(), v.GetDownloadURL(), v.GetSHA())
-	// }
-	url := "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/03-16-2020.csv"
+	if err != nil {
+		log.Fatalf("error: %v", err)
+	}
 
-	resp, _ := readCSVFromUrl(url)
+	client := github.NewClient(nil)
+
+	_, directoryContent, _, err := client.Repositories.GetContents(context.Background(), "CSSEGISandData", "COVID-19", "csse_covid_19_data/csse_covid_19_daily_reports", nil)
+
+	if err != nil {
+		panic(err)
+	}
+
+	for _, v := range directoryContent {
+		if strings.HasSuffix(v.GetName(), "csv") {
+			lastFileURL = v.GetDownloadURL()
+			lastFileName = v.GetName()
+		}
+	}
+
+	lastFileDate, _ := time.Parse(
+		"01-02-2006.csv",
+		lastFileName)
+
+	resp, _ := readCSVFromURL(lastFileURL)
+
+	stats := make([]Row, 0)
+
+	fullStats := map[string]Row{}
 
 	for i := 0; i < len(resp); i++ {
-		// fmt.Println(strings.Split(resp[i], ","))
-		// fmt.Printf("%T", resp[i])
-		fmt.Println(resp[i][1])
+		key = ""
+
+		confirmed, _ := strconv.Atoi(resp[i][3])
+		deaths, _ := strconv.Atoi(resp[i][4])
+		recovered, _ := strconv.Atoi(resp[i][5])
+		country := strings.ToLower(resp[i][1])
+
+		t1, _ := time.Parse(
+			time.RFC3339,
+			resp[i][2]+"Z")
+
+		stats = append(stats, Row{
+			province:   resp[i][0],
+			country:    resp[i][1],
+			confirmed:  confirmed,
+			deaths:     deaths,
+			recovered:  recovered,
+			lastUpdate: t1.Format("2006-01-02 15:04:05"),
+		})
+
+		if resp[i][0] == "" {
+			key = country
+		} else {
+			key = strings.ToLower(resp[i][0])
+
+			if _, err := fullStats[country]; err == false {
+				fullStats[country] = Row{}
+			}
+
+			if thisRow, ok := fullStats[country]; ok {
+				thisRow.country = resp[i][1]
+				thisRow.confirmed = thisRow.confirmed + confirmed
+				thisRow.deaths = thisRow.deaths + deaths
+				thisRow.recovered = thisRow.recovered + recovered
+				thisRow.lastUpdate = t1.Format("2006-01-02 15:04:05")
+				fullStats[country] = thisRow
+			}
+		}
+
+		if _, err := fullStats[key]; err == false {
+			fullStats[key] = Row{}
+		}
+
+		if thisRow, ok := fullStats[key]; ok {
+			thisRow.province = resp[i][0]
+			thisRow.country = resp[i][1]
+			thisRow.confirmed = thisRow.confirmed + confirmed
+			thisRow.deaths = thisRow.deaths + deaths
+			thisRow.recovered = thisRow.recovered + recovered
+			thisRow.lastUpdate = t1.Format("2006-01-02 15:04:05")
+			fullStats[key] = thisRow
+		}
 	}
-	// fmt.Println(resp)
 
-	// resp, err := http.Get("https://api.github.com/repos/CSSEGISandData/COVID-19/git/trees/e22872e7e9ea17b968386c79437a431ebec09d7d")
+	messageText := "Date: " + lastFileDate.Format("02.01.2006") + "\n"
 
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer resp.Body.Close()
+	if len(config.Locations) < 1 {
+		panic("Invalid config. Set `locations` field")
+	}
 
-	// // fmt.Println("Response status:", resp.Status)
+	for _, v := range config.Locations {
+		findKey = strings.ToLower(v)
+		if _, err := fullStats[findKey]; err == false {
+			messageText = messageText + "Location `" + v + "` not found\n"
+			continue
+		}
 
-	// b, err := ioutil.ReadAll(resp.Body)
+		messageText = messageText + "Location `" + v + "` statistics: " +
+			"Confirmed: " + strconv.Itoa(fullStats[findKey].confirmed) + "; " +
+			"Deaths: " + strconv.Itoa(fullStats[findKey].deaths) + "; " +
+			"Recovered: " + strconv.Itoa(fullStats[findKey].recovered) + "\n"
+	}
 
-	// if err != nil {
-	// 	panic(err)
-	// }
+	message := map[string]interface{}{
+		"text":    messageText,
+		"channel": "",
+	}
 
-	// // fmt.Printf("%s", b)
+	clientReq := &http.Client{}
 
-	// var dat map[string]interface{}
+	// ROCKET
+	if config.Rocketchat.Active == true {
+		message["channel"] = "#" + config.Rocketchat.ChannelName
 
-	// if err := json.Unmarshal(b, &dat); err != nil {
-	// 	panic(err)
-	// }
-	// fmt.Println(dat["tree"].([]interface{})[0].(string))
+		bytesRepresentation, err := json.Marshal(message)
+		if err != nil {
+			log.Fatalln(err)
+		}
 
-	// // for i := 0; i < len(); i++ {
-	// // 	fmt.Println(i)
-	// // }
+		req, _ := http.NewRequest("POST", config.Rocketchat.URL, bytes.NewBuffer(bytesRepresentation))
+		req.Header.Add("X-Auth-Token", config.Rocketchat.Token)
+		req.Header.Add("X-User-Id", config.Rocketchat.UserID)
+
+		res, _ := clientReq.Do(req)
+		_, err = ioutil.ReadAll(res.Body)
+		defer res.Body.Close()
+		fmt.Println(res)
+	}
+
+	// SLACK
+	// clientReq := &http.Client{}
+	if config.Slack.Active == true {
+		bearer := "Bearer " + config.Slack.Token
+		slackChannel := "#" + config.Slack.ChannelName
+		message["channel"] = slackChannel
+		bytesRepresentation, err := json.Marshal(message)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		req, _ := http.NewRequest("POST", config.Slack.URL, bytes.NewBuffer(bytesRepresentation))
+		req.Header.Add("Authorization", bearer)
+		req.Header.Add("Content-Type", "application/json; charset=utf8")
+
+		res, _ := clientReq.Do(req)
+		_, err = ioutil.ReadAll(res.Body)
+		defer res.Body.Close()
+	}
+
 }
