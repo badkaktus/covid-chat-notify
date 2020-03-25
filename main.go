@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -104,21 +103,52 @@ func main() {
 
 	fullStats := map[string]Row{}
 
+	// find need keys
+	keys := map[string]int{
+		"province": 0,
+		"country":  0,
+		"conf":     0,
+		"death":    0,
+		"recov":    0,
+		"last_upd": 0,
+	}
+	for i, v := range resp[0] {
+		researchString := strings.ToLower(v)
+		if strings.Contains(researchString, "province") {
+			keys["province"] = i
+		}
+		if strings.Contains(researchString, "country") {
+			keys["country"] = i
+		}
+		if strings.Contains(researchString, "confirmed") {
+			keys["conf"] = i
+		}
+		if strings.Contains(researchString, "deaths") {
+			keys["death"] = i
+		}
+		if strings.Contains(researchString, "recovered") {
+			keys["recov"] = i
+		}
+		if strings.Contains(researchString, "update") {
+			keys["last_upd"] = i
+		}
+	}
+
 	for i := 0; i < len(resp); i++ {
 		key = ""
 
-		confirmed, _ := strconv.Atoi(resp[i][7])
-		deaths, _ := strconv.Atoi(resp[i][8])
-		recovered, _ := strconv.Atoi(resp[i][9])
-		country := strings.ToLower(resp[i][3])
+		confirmed, _ := strconv.Atoi(resp[i][keys["conf"]])
+		deaths, _ := strconv.Atoi(resp[i][keys["death"]])
+		recovered, _ := strconv.Atoi(resp[i][keys["recov"]])
+		country := strings.ToLower(resp[i][keys["country"]])
 
 		t1, _ := time.Parse(
 			time.RFC3339,
 			resp[i][4]+"Z")
 
 		stats = append(stats, Row{
-			province:   resp[i][2],
-			country:    resp[i][3],
+			province:   resp[i][keys["province"]],
+			country:    resp[i][keys["country"]],
 			confirmed:  confirmed,
 			deaths:     deaths,
 			recovered:  recovered,
@@ -128,14 +158,14 @@ func main() {
 		if resp[i][2] == "" {
 			key = country
 		} else {
-			key = strings.ToLower(resp[i][2])
+			key = strings.ToLower(resp[i][keys["province"]])
 
 			if _, err := fullStats[country]; err == false {
 				fullStats[country] = Row{}
 			}
 
 			if thisRow, ok := fullStats[country]; ok {
-				thisRow.country = resp[i][3]
+				thisRow.country = resp[i][keys["country"]]
 				thisRow.confirmed = thisRow.confirmed + confirmed
 				thisRow.deaths = thisRow.deaths + deaths
 				thisRow.recovered = thisRow.recovered + recovered
@@ -149,8 +179,8 @@ func main() {
 		}
 
 		if thisRow, ok := fullStats[key]; ok {
-			thisRow.province = resp[i][2]
-			thisRow.country = resp[i][3]
+			thisRow.province = resp[i][keys["province"]]
+			thisRow.country = resp[i][keys["country"]]
 			thisRow.confirmed = thisRow.confirmed + confirmed
 			thisRow.deaths = thisRow.deaths + deaths
 			thisRow.recovered = thisRow.recovered + recovered
@@ -164,8 +194,7 @@ func main() {
 	if len(config.Locations) < 1 {
 		panic("Invalid config. Set `locations` field")
 	}
-	// fmt.Println(fullStats)
-	// return
+
 	for _, v := range config.Locations {
 		findKey = strings.ToLower(v)
 		if _, err := fullStats[findKey]; err == false {
@@ -190,39 +219,45 @@ func main() {
 	if config.Rocketchat.Active == true {
 		message["channel"] = "#" + config.Rocketchat.ChannelName
 
-		bytesRepresentation, err := json.Marshal(message)
-		if err != nil {
-			log.Fatalln(err)
+		headersRocket := map[string]string{
+			"X-Auth-Token": config.Rocketchat.Token,
+			"X-User-Id":    config.Rocketchat.UserID,
 		}
 
-		req, _ := http.NewRequest("POST", config.Rocketchat.URL, bytes.NewBuffer(bytesRepresentation))
-		req.Header.Add("X-Auth-Token", config.Rocketchat.Token)
-		req.Header.Add("X-User-Id", config.Rocketchat.UserID)
-
-		res, _ := clientReq.Do(req)
-		_, err = ioutil.ReadAll(res.Body)
-		defer res.Body.Close()
-		fmt.Println(res)
+		send(clientReq, config.Rocketchat.URL, message, headersRocket)
 	}
 
 	// SLACK
-	// clientReq := &http.Client{}
 	if config.Slack.Active == true {
 		bearer := "Bearer " + config.Slack.Token
 		slackChannel := "#" + config.Slack.ChannelName
 		message["channel"] = slackChannel
-		bytesRepresentation, err := json.Marshal(message)
-		if err != nil {
-			log.Fatalln(err)
+
+		headersSlack := map[string]string{
+			"Authorization": bearer,
+			"Content-Type":  "application/json; charset=utf8",
 		}
 
-		req, _ := http.NewRequest("POST", config.Slack.URL, bytes.NewBuffer(bytesRepresentation))
-		req.Header.Add("Authorization", bearer)
-		req.Header.Add("Content-Type", "application/json; charset=utf8")
-
-		res, _ := clientReq.Do(req)
-		_, err = ioutil.ReadAll(res.Body)
-		defer res.Body.Close()
+		send(clientReq, config.Slack.URL, message, headersSlack)
 	}
 
+}
+
+func send(client *http.Client, URL string, sendData map[string]interface{}, headers map[string]string) {
+
+	bytesRepresentation, err := json.Marshal(sendData)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	req, _ := http.NewRequest("POST", URL, bytes.NewBuffer(bytesRepresentation))
+	for i, v := range headers {
+		req.Header.Add(i, v)
+	}
+
+	res, _ := client.Do(req)
+	body, err := ioutil.ReadAll(res.Body)
+	log.Println(string(body))
+
+	res.Body.Close()
 }
