@@ -107,35 +107,35 @@ func main() {
 	for i := 0; i < len(resp); i++ {
 		key = ""
 
-		confirmed, _ := strconv.Atoi(resp[i][3])
-		deaths, _ := strconv.Atoi(resp[i][4])
-		recovered, _ := strconv.Atoi(resp[i][5])
-		country := strings.ToLower(resp[i][1])
+		confirmed, _ := strconv.Atoi(resp[i][7])
+		deaths, _ := strconv.Atoi(resp[i][8])
+		recovered, _ := strconv.Atoi(resp[i][9])
+		country := strings.ToLower(resp[i][3])
 
 		t1, _ := time.Parse(
 			time.RFC3339,
-			resp[i][2]+"Z")
+			resp[i][4]+"Z")
 
 		stats = append(stats, Row{
-			province:   resp[i][0],
-			country:    resp[i][1],
+			province:   resp[i][2],
+			country:    resp[i][3],
 			confirmed:  confirmed,
 			deaths:     deaths,
 			recovered:  recovered,
 			lastUpdate: t1.Format("2006-01-02 15:04:05"),
 		})
 
-		if resp[i][0] == "" {
+		if resp[i][2] == "" {
 			key = country
 		} else {
-			key = strings.ToLower(resp[i][0])
+			key = strings.ToLower(resp[i][2])
 
 			if _, err := fullStats[country]; err == false {
 				fullStats[country] = Row{}
 			}
 
 			if thisRow, ok := fullStats[country]; ok {
-				thisRow.country = resp[i][1]
+				thisRow.country = resp[i][3]
 				thisRow.confirmed = thisRow.confirmed + confirmed
 				thisRow.deaths = thisRow.deaths + deaths
 				thisRow.recovered = thisRow.recovered + recovered
@@ -149,8 +149,8 @@ func main() {
 		}
 
 		if thisRow, ok := fullStats[key]; ok {
-			thisRow.province = resp[i][0]
-			thisRow.country = resp[i][1]
+			thisRow.province = resp[i][2]
+			thisRow.country = resp[i][3]
 			thisRow.confirmed = thisRow.confirmed + confirmed
 			thisRow.deaths = thisRow.deaths + deaths
 			thisRow.recovered = thisRow.recovered + recovered
@@ -164,7 +164,8 @@ func main() {
 	if len(config.Locations) < 1 {
 		panic("Invalid config. Set `locations` field")
 	}
-
+	// fmt.Println(fullStats)
+	// return
 	for _, v := range config.Locations {
 		findKey = strings.ToLower(v)
 		if _, err := fullStats[findKey]; err == false {
